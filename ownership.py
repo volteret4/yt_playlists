@@ -46,7 +46,13 @@ def check_airsonic(artist: str, title: str) -> bool:
         return False
     target_artist, target_title = normalize(artist), normalize(title)
     for r in results:
-        if normalize(r["artist"]) == target_artist and normalize(r["title"]) == target_title:
+        # Algunas pistas vienen de álbumes trocedaos por .cue con solo tag de
+        # artista a nivel de álbum -- Airsonic devuelve song.artist="" para
+        # esas pistas (visto en vivo con "Dayvan Cowboy" de Boards of
+        # Canada). Un título exacto sin artista sigue siendo una señal
+        # fuerte aquí (no hay nada destructivo en juego, solo un indicador).
+        result_artist = normalize(r["artist"])
+        if normalize(r["title"]) == target_title and (not result_artist or result_artist == target_artist):
             return True
     return False
 
