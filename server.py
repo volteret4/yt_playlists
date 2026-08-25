@@ -7,6 +7,7 @@ import sync
 import youtube_client as yt
 from airsonic_client import AirsonicError
 from db import get_conn
+from enrich_info import get_track_info
 
 app = Flask(__name__)
 
@@ -91,6 +92,21 @@ def api_sync_playlist(playlist_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/track_info")
+def api_track_info():
+    artist = request.args.get("artist", "").strip()
+    title = request.args.get("title", "").strip()
+    if not artist or not title:
+        return jsonify({"error": "faltan artist/title"}), 400
+    try:
+        info = get_track_info(artist, title)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    resp = jsonify(info)
+    resp.headers["Cache-Control"] = "public, max-age=3600"
+    return resp
+
+
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="es">
@@ -138,9 +154,28 @@ th { color: var(--text-muted); font-weight: 600; text-transform: uppercase; font
 .mark.yes { color: var(--accent); }
 .mark.no { color: var(--text-muted); }
 .raw-title { color: var(--text-muted); font-size: 11px; }
-a.video-link { color: var(--text); text-decoration: none; }
-a.video-link:hover { text-decoration: underline; }
+.track-title { color: var(--text); cursor: pointer; }
+.track-title:hover { color: #fff; text-decoration: underline; }
 .empty { color: var(--text-muted); font-size: 12px; padding: 10px 0; }
+
+/* ── Panel lateral ── */
+#panel {
+    position: fixed; top: 0; right: 0; width: 380px; max-width: 92vw; height: 100vh;
+    background: var(--surface); border-left: 1px solid var(--border); box-shadow: -8px 0 24px rgba(0,0,0,0.4);
+    overflow-y: auto; transform: translateX(100%); transition: transform 0.25s ease; z-index: 200; padding: 16px;
+}
+#panel.open { transform: translateX(0); }
+#panel-close { position: absolute; top: 10px; right: 12px; background: var(--surface-2); color: var(--text); border: none; border-radius: 50%; width: 26px; height: 26px; font-size: 14px; padding: 0; cursor: pointer; }
+.panel-section { margin-top: 16px; }
+.panel-section h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted); margin-bottom: 6px; }
+.panel-title { font-size: 15px; font-weight: bold; color: #fff; margin-top: 8px; padding-right: 26px; }
+.panel-sub { font-size: 12px; color: var(--text-muted); }
+.panel-img { width: 100%; max-height: 160px; object-fit: cover; border-radius: 8px; margin-bottom: 8px; }
+.panel-text { font-size: 12px; color: var(--text); line-height: 1.5; max-height: 140px; overflow-y: auto; }
+.panel-link { color: var(--accent); font-size: 12px; text-decoration: none; display: inline-block; margin-top: 6px; }
+.panel-link:hover { text-decoration: underline; }
+.panel-empty { color: var(--text-muted); font-size: 12px; }
+#panel iframe { width: 100%; height: 200px; border: none; border-radius: 8px; }
 </style>
 </head>
 <body>
@@ -163,6 +198,11 @@ a.video-link:hover { text-decoration: underline; }
 </div>
 <div id="add-error" class="error"></div>
 <div id="users"></div>
+
+<div id="panel">
+    <button id="panel-close" onclick="closePanel()">×</button>
+    <div id="panel-body"></div>
+</div>
 
 <script>
 function escapeHtml(s) {
@@ -241,17 +281,21 @@ async function loadTracks(playlistId) {
         <table>
             <thead><tr><th></th><th>Artista</th><th>Canción</th><th>Título original</th></tr></thead>
             <tbody>
-                ${tracks.map(t => `
+                ${tracks.map((t, i) => `
                     <tr>
                         <td><span class="mark ${t.owned ? 'yes' : 'no'}">${t.owned ? '✓' : '✗'}</span></td>
                         <td>${escapeHtml(t.parsed_artist || '')}</td>
-                        <td><a class="video-link" href="https://www.youtube.com/watch?v=${encodeURIComponent(t.video_id)}" target="_blank" rel="noopener">${escapeHtml(t.parsed_title)}</a></td>
+                        <td><span class="track-title" data-idx="${i}">${escapeHtml(t.parsed_title)}</span></td>
                         <td class="raw-title">${escapeHtml(t.raw_title)}</td>
                     </tr>
                 `).join('')}
             </tbody>
         </table>
     `;
+    el.querySelectorAll('.track-title').forEach(span => {
+        const t = tracks[parseInt(span.dataset.idx)];
+        span.addEventListener('click', () => openPanel(t));
+    });
 }
 
 async function syncPlaylist(playlistId, userId) {
@@ -291,6 +335,79 @@ async function addPlaylist() {
     if (data.error) { document.getElementById('add-error').textContent = data.error; return; }
     input.value = '';
     loadUsers();
+}
+
+// ── Panel lateral ────────────────────────────────────────────────────────
+
+function openPanel(track) {
+    const panel = document.getElementById('panel');
+    const body = document.getElementById('panel-body');
+    body.innerHTML = `
+        <iframe src="https://www.youtube.com/embed/${encodeURIComponent(track.video_id)}" allowfullscreen></iframe>
+        <div class="panel-title">${escapeHtml(track.parsed_title)}</div>
+        <div class="panel-sub">${escapeHtml(track.parsed_artist || '')}</div>
+        <div id="panel-extra"><div class="panel-empty" style="margin-top:16px">Cargando…</div></div>
+    `;
+    panel.classList.add('open');
+
+    if (!track.parsed_artist) return;
+    const params = new URLSearchParams({ artist: track.parsed_artist, title: track.parsed_title });
+    fetch('/api/track_info?' + params.toString())
+        .then(r => r.json())
+        .then(info => { document.getElementById('panel-extra').innerHTML = renderPanelExtra(info); })
+        .catch(() => { document.getElementById('panel-extra').innerHTML = '<div class="panel-empty">No se pudo cargar la info.</div>'; });
+}
+
+function closePanel() {
+    document.getElementById('panel').classList.remove('open');
+}
+
+function panelSection(title, html) {
+    return `<div class="panel-section"><h4>${title}</h4>${html}</div>`;
+}
+
+function renderPanelExtra(info) {
+    let html = '';
+
+    const ar = info.artist || {};
+    if (ar.name) {
+        html += panelSection('Artista · Last.fm', `
+            ${ar.image ? `<img class="panel-img" src="${escapeHtml(ar.image)}">` : ''}
+            ${ar.listeners ? `<div class="panel-sub">${parseInt(ar.listeners).toLocaleString('es-ES')} oyentes</div>` : ''}
+            ${ar.bio ? `<div class="panel-text">${escapeHtml(ar.bio)}</div>` : ''}
+            ${ar.url ? `<a class="panel-link" href="${escapeHtml(ar.url)}" target="_blank" rel="noopener">Ver en Last.fm ↗</a>` : ''}
+        `);
+    }
+
+    const wiki = info.wikipedia || {};
+    if (wiki.extract || wiki.url) {
+        html += panelSection('Wikipedia', `
+            ${wiki.extract ? `<div class="panel-text">${escapeHtml(wiki.extract)}</div>` : ''}
+            ${wiki.url ? `<a class="panel-link" href="${escapeHtml(wiki.url)}" target="_blank" rel="noopener">Ver en Wikipedia ↗</a>` : ''}
+        `);
+    }
+
+    const mb = info.musicbrainz || {};
+    if (mb.artist_url || mb.release_group_url) {
+        html += panelSection('MusicBrainz', `
+            ${mb.artist_url ? `<a class="panel-link" href="${escapeHtml(mb.artist_url)}" target="_blank" rel="noopener">Artista en MusicBrainz ↗</a><br>` : ''}
+            ${mb.release_group_url ? `<a class="panel-link" href="${escapeHtml(mb.release_group_url)}" target="_blank" rel="noopener">Álbum en MusicBrainz ↗</a>` : ''}
+        `);
+    }
+
+    const al = info.album || {};
+    if (al.name) {
+        const meta = [al.label, al.year, al.genre].filter(Boolean).join(' · ');
+        html += panelSection('Álbum', `
+            ${al.image ? `<img class="panel-img" src="${escapeHtml(al.image)}">` : ''}
+            <div class="panel-sub" style="font-weight:bold;color:#fff">${escapeHtml(al.name)}</div>
+            ${meta ? `<div class="panel-sub">${escapeHtml(meta)}</div>` : ''}
+            ${al.wiki ? `<div class="panel-text">${escapeHtml(al.wiki)}</div>` : ''}
+            ${al.url ? `<a class="panel-link" href="${escapeHtml(al.url)}" target="_blank" rel="noopener">Ver en Last.fm ↗</a>` : ''}
+        `);
+    }
+
+    return html || '<div class="panel-empty" style="margin-top:16px">Sin información adicional.</div>';
 }
 
 loadUsers();

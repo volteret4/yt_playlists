@@ -19,6 +19,14 @@
   conexión de solo lectura a `musica_local.sqlite` con `immutable=1` en la
   URI (bind-mount `:ro` de Docker — `mode=ro` solo no basta, mismo problema
   ya encontrado y documentado en `services/lastfm_explorer/db.py`).
+- `enrich_info.py` — info para el panel lateral (Last.fm + Wikipedia +
+  MusicBrainz), mismo patrón que `services/escuchowsky/app_discover.py`
+  (`lfm_get`/`_lfm_image`/`mb_search_release_group`, reutilizados casi tal
+  cual). Como aquí solo se tiene artista+canción (no álbum), primero mira
+  `musica_local.sqlite` para el álbum si la canción es propia; si no, usa
+  `track.getInfo` de Last.fm para resolverlo antes de pedir
+  `album.getInfo`. `wikipedia_summary()` es nuevo (no existía en
+  escuchowsky) — REST API pública de Wikipedia, sin API key.
 
 ## Por qué no yt-dlp
 
