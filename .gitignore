@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 yt_playlists.db
+.env
+*.env.bak*
+.env.bak*
