@@ -4,3 +4,4 @@ yt_playlists.db
 .env
 *.env.bak*
 .env.bak*
+datos/

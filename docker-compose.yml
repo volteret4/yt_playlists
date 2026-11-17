@@ -1,0 +1,38 @@
+# Instalación por separado. Dentro de REPEAT-ONE se usa el docker-compose.yml de REPEAT-ONE.
+services:
+  yt-playlists:
+    build: .
+    restart: unless-stopped
+    user: "${UID_GID:-1000:1000}"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - HOME=/tmp
+      - PYTHONDONTWRITEBYTECODE=1
+      - DB_PATH=/app/yt_playlists.db
+      - MUSICA_LOCAL_DB=/musica_local/musica_local.sqlite
+    volumes:
+      - .:/app
+      - ${MUSICA_LOCAL_DIR:-./datos/musica_local}:/musica_local:ro
+    ports:
+      - "${PUERTO:-8772}:5000"
+    labels:
+      ofelia.enabled: "true"
+      repeat-one.ofelia: "yt_playlists"
+      ofelia.job-exec.yt-playlists-daily.schedule: "0 20 0 * * *"
+      ofelia.job-exec.yt-playlists-daily.command: "nice -n 19 ionice -c 3 python3 sync.py --all"
+
+  # Ofelia lanza los trabajos programados de las etiquetas ofelia.job-exec.* de arriba
+  # (los mismos horarios que en REPEAT-ONE). Solo ve los contenedores de este repo.
+  # Si no quieres actualizaciones automáticas: docker compose stop ofelia
+  ofelia:
+    image: mcuadros/ofelia:latest
+    restart: unless-stopped
+    command: daemon --docker --docker-filter=label=repeat-one.ofelia=yt_playlists
+    environment:
+      - TZ=${TZ:-Europe/Madrid}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - yt-playlists
